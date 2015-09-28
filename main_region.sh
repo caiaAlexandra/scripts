@@ -58,11 +58,11 @@ fi
 # brainmask 
 if [ ! -f $PRD/connectivity_regions/lowb.nii  ]
 then
-average $PRD/connectivity_regions/dwi.mif -axis 3 $PRD/connectivity_regions/lowb.nii
+mrmath $PRD/connectivity_regions/dwi.mif -axis 3 mean $PRD/connectivity_regions/lowb.nii
 fi
 if [ ! -f $PRD/connectivity_regions/mask_not_checked.mif ]
 then
-threshold -percent $percent_value_mask $PRD/connectivity_regions/lowb.nii - | median3D - - | median3D - $PRD/connectivity_regions/mask_not_checked.mif
+mrthreshold -percent $percent_value_mask $PRD/connectivity_regions/lowb.nii - | mrfilter - median  - | mrfilter - median $PRD/connectivity_regions/mask_not_checked.mif
 fi
 
 # check the mask
@@ -78,7 +78,7 @@ read -p "was the mask good?" yn
 case $yn in
 [Yy]* ) break;;
 [Nn]* ) read -p "enter new threshold value" percent_value_mask; echo $percent_value_mask; rm $PRD/connectivity_regions/mask_checked.mif; 
-	threshold -percent $percent_value_mask $PRD/connectivity_regions/lowb.nii - | median3D - - | median3D - $PRD/connectivity_regions/mask_checked.mif;;
+	mrthreshold -percent $percent_value_mask $PRD/connectivity_regions/lowb.nii - | mrfilter - median - | mrfilter - median $PRD/connectivity_regions/mask_checked.mif;;
  * ) echo "Please answer y or n.";;
 esac
 done
@@ -92,52 +92,51 @@ elif [ -f $PRD/connectivity_regions/mask_not_checked.mif ]
 then
 cp $PRD/connectivity_regions/mask_not_checked.mif $PRD/connectivity_regions/mask.mif
 fi
-
 # tensor imaging
 if [ ! -f $PRD/connectivity_regions/dt.mif ]
 then
 if [ -f $PRD/data/DWI/*.nii ]
 then
-ls $PRD/data/DWI/ | grep .b | xargs -I {} dwi2tensor $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/dt.mif -grad $PRD/data/DWI/{}
+dwi2tensor $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/dt.mif -fslgrad $PRD/data/DWI/bvecs $PRD/data/DWI/bvals
 else
 dwi2tensor $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/dt.mif
 fi
 fi
 if [ ! -f $PRD/connectivity_regions/fa.mif ]
 then
-tensor2FA $PRD/connectivity_regions/dt.mif - | mrmult - $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/fa.mif
+tensor2metric $PRD/connectivity_regions/dt.mif -fa - | mrcalc - $PRD/connectivity_regions/mask.mif -mult $PRD/connectivity_regions/fa.mif
 fi
 if [ ! -f $PRD/connectivity_regions/ev.mif ]
 then
-tensor2vector $PRD/connectivity_regions/dt.mif - | mrmult - $PRD/connectivity_regions/fa.mif $PRD/connectivity_regions/ev.mif
+tensor2metric $PRD/connectivity_regions/dt.mif -vector - | mrcalc - $PRD/connectivity_regions/fa.mif -mult $PRD/connectivity_regions/ev.mif
 fi
-# constrained spherical decconvolution
+echo "constrained spherical decconvolution"
 if [ ! -f $PRD/connectivity_regions/sf.mif ]
 then
-erode $PRD/connectivity_regions/mask.mif -npass 3 - | mrmult $PRD/connectivity_regions/fa.mif - - | threshold - -abs 0.7 $PRD/connectivity_regions/sf.mif
+maskfilter $PRD/connectivity_regions/mask.mif -npass 3 erode - | mrcalc $PRD/connectivity_regions/fa.mif - -mult - | mrthreshold - -abs 0.7 $PRD/connectivity_regions/sf.mif
 fi
 if [ ! -f $PRD/connectivity_regions/response.txt ]
 then
 if [ -f $PRD/data/DWI/*.nii ]
 then
-ls $PRD/data/DWI/ | grep .b | xargs -I {} estimate_response $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/sf.mif -lmax $lmax $PRD/connectivity_regions/response.txt -grad $PRD/data/DWI/{}
+dwi2response $PRD/connectivity_regions/dwi.mif -mask $PRD/connectivity_regions/sf.mif -lmax $lmax $PRD/connectivity_regions/response.txt -fslgrad $PRD/data/DWI/bvecs $PRD/data/DWI/bvals
 else
-estimate_response $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/sf.mif -lmax $lmax $PRD/connectivity_regions/response.txt
+dwi2response $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/sf.mif -lmax $lmax $PRD/connectivity_regions/response.txt
 fi
 fi
 if  [ -n "$DISPLAY" ]  &&  [ "$CHECK" = "yes" ]
 then
 echo "check the response function"
 echo "it should be broadest in the axial plane, and have low amplitude along the z-axis."
-disp_profile -response $PRD/connectivity_regions/response.txt
+shview -response $PRD/connectivity_regions/response.txt
 fi
 if [ ! -f $PRD/connectivity_regions/CSD6.mif ]
 then
 if [ -f $PRD/data/DWI/*.nii ]
 then
-ls $PRD/data/DWI/ | grep .b | xargs -I {} csdeconv $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/response.txt -lmax $lmax -mask $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/CSD6.mif -grad $PRD/data/DWI/{}
+dwi2fod $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/response.txt -lmax $lmax -mask $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/CSD6.mif -fslgrad $PRD/data/DWI/bvecs $PRD/data/DWI/bvals
 else
-csdeconv $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/response.txt -lmax $lmax -mask $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/CSD6.mif
+dwi2fod $PRD/connectivity_regions/dwi.mif $PRD/connectivity_regions/response.txt -lmax $lmax -mask $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/CSD6.mif
 fi
 fi
 
@@ -147,7 +146,8 @@ then
 echo "generating tracks"
 for I in $(seq 1 $number_tracks)
 do
-streamtrack SD_PROB $PRD/connectivity_regions/CSD6.mif -seed $PRD/connectivity_regions/mask.mif -mask $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/whole_brain_$I.tck -num 100000
+#tckgen $PRD/connectivity_regions/CSD6.mif -seed_sphere $PRD/connectivity_regions/mask.mif -mask $PRD/connectivity_regions/mask.mif $PRD/connectivity_regions/whole_brain_$I.tck -num 100000
+tckgen $PRD/connectivity_regions/CSD6.mif $PRD/connectivity_regions/whole_brain_$I.tck -algorithm iFOD1 -seed_image $PRD/connectivity_regions/mask.mif -mask $PRD/connectivity_regions/mask.mif -num 100000
 done
 fi
 
@@ -184,8 +184,7 @@ fi
 if [ -n "$DISPLAY" ]  && [ "$CHECK" = "yes" ]
 then
 echo "check parcellation"
-echo "if it's correct, just close the window. Otherwise you will have to
-do the registration by hand"
+echo "if it's correct, just close the window. Otherwise you will have to do the registration by hand"
 fslview $PRD/connectivity_regions/T1.nii.gz $PRD/connectivity_regions/region_parcellation_reorient -l "Cool"
 fi
 
@@ -201,8 +200,7 @@ fi
 if [ -n "$DISPLAY" ]  && [ "$CHECK" = "yes" ]
 then
 echo "check parcellation"
-echo "if it's correct, just close the window. Otherwise you will have to
-do the registration by hand"
+echo "if it's correct, just close the window. Otherwise you will have to do the registration by hand"
 fslview $PRD/connectivity_regions/lowb.nii $PRD/connectivity_regions/region_parcellation_2_diff -l "Cool"
 fi
 
