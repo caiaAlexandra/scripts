@@ -42,6 +42,9 @@ then
 else
     export FS=$SUBJECTS_DIR
 fi
+######### give execution right to files
+echo "give execution right to files"
+bash rights_for_files.sh 
 
 ######### build cortical surface and region mapping
 if [ ! -f $PRD/data/T1/T1.nii.gz ]
